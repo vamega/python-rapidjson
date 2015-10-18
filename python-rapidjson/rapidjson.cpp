@@ -352,6 +352,8 @@ struct PyHandler {
     }
 
     RAPIDJSON_FORCEINLINE bool String(const char* str, SizeType length, bool copy) {
+        //PyObject* value = PyBytes_FromStringAndSize(str, length);
+        //TODO XXX
         PyObject* value = PyUnicode_FromStringAndSize(str, length);
         return HandleSimpleType(value);
     }
@@ -393,6 +395,7 @@ rapidjson_loads(PyObject* self, PyObject* args, PyObject* kwargs)
         return NULL;
     }
 
+    PyObject* unicodeBytes = NULL;
     Py_ssize_t jsonStrLen;
     char* jsonStr;
 
@@ -402,9 +405,22 @@ rapidjson_loads(PyObject* self, PyObject* args, PyObject* kwargs)
             return NULL;
     }
     else if (PyUnicode_Check(jsonObject)) {
-        jsonStr = PyUnicode_AsUTF8AndSize(jsonObject, &jsonStrLen);
-        if (jsonStr == NULL)
-            return NULL;
+#if (PY_VERSION_HEX >= 0x03030000)
+        if (PyUnicode_IS_COMPACT_ASCII(jsonObject)) {
+            jsonStr = PyUnicode_AsUTF8AndSize(jsonObject, &jsonStrLen);
+            if (jsonStr == NULL)
+                return NULL;
+        }
+        else
+#endif
+        {
+            unicodeBytes = PyUnicode_AsUTF8String(jsonObject);
+            if (unicodeBytes == NULL)
+                return NULL;
+
+            jsonStr = PyBytes_AS_STRING(unicodeBytes);
+            jsonStrLen = PyBytes_GET_SIZE(unicodeBytes);
+        }
     }
     else {
         PyErr_SetString(PyExc_TypeError, "Expected string or utf-8 encoded bytes");
@@ -413,6 +429,8 @@ rapidjson_loads(PyObject* self, PyObject* args, PyObject* kwargs)
 
     char* jsonStrCopy = (char*) malloc(sizeof(char) * (jsonStrLen+1));
     memcpy(jsonStrCopy, jsonStr, jsonStrLen+1);
+
+    Py_XDECREF(unicodeBytes);
 
     PyHandler handler(useDecimal, objectHook, allowNan);
     Reader reader;
@@ -617,19 +635,16 @@ rapidjson_dumps_internal(
             writer->String(s);
         }
         else if (PyUnicode_Check(object)) {
-//            char* s = PyUnicode_AsUTF8(object);
-//            writer->String(s);
-
-//#if (PY_VERSION_HEX >= 0x03030000)
+#if (PY_VERSION_HEX >= 0x03030000)
             if (PyUnicode_IS_COMPACT_ASCII(object)) {
                 char* s = PyUnicode_AsUTF8(object);
                 writer->String(s);
             }
             else
-//#endif
+#endif
             {
                 PyObject* bytes = PyUnicode_AsUTF8String(object);
-                if (!bytes) {
+                if (bytes == NULL) {
                     return NULL;
                 }
 
@@ -683,7 +698,7 @@ rapidjson_dumps_internal(
 #endif
                         {
                             PyObject* bytes = PyUnicode_AsUTF8String(object);
-                            if (!bytes) {
+                            if (bytes == NULL) {
                                 PyErr_SetString(PyExc_TypeError, "could not decode utf8 from key");
                                 goto error;
                             }
@@ -711,7 +726,7 @@ rapidjson_dumps_internal(
 #endif
                         {
                             PyObject* bytes = PyUnicode_AsUTF8String(object);
-                            if (!bytes) {
+                            if (bytes == NULL) {
                                 PyErr_SetString(PyExc_TypeError, "could not decode utf8 from key");
                                 goto error;
                             }
