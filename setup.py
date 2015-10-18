@@ -50,6 +50,7 @@ rapidjson = Extension(
     'rapidjson',
     sources=['./python-rapidjson/rapidjson.cpp'],
     include_dirs=['./thirdparty/rapidjson/include'],
+    extra_compile_args=['-O3'],
 )
 
 setup(

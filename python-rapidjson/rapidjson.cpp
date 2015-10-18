@@ -20,6 +20,9 @@
  * IN THE SOFTWARE.
  */
 
+#define RAPIDJSON_SSE2
+#define RAPIDJSON_SIMD
+
 #include <Python.h>
 #include <datetime.h>
 
@@ -61,37 +64,44 @@ struct PyHandler {
         stack.reserve(128);
     }
 
-    bool Handle(PyObject* value) {
-        if (root) {
-            const HandlerContext& current = stack.back();
-
-            if (current.isObject) {
-                PyObject* key = PyUnicode_FromStringAndSize(current.key, current.keyLength);
-                if (key == NULL) {
-                    Py_DECREF(value);
-                    return false;
-                }
-
-                int rc = PyDict_SetItem(current.object, key, value);
-                Py_DECREF(key);
-                Py_DECREF(value);
-
-                if (rc == -1) {
-                    return false;
-                }
-            }
-            else {
-                PyList_Append(current.object, value);
-                Py_DECREF(value);
-            }
-        }
-        else {
-            root = value;
-        }
+    RAPIDJSON_FORCEINLINE bool HandleRoot(PyObject* value) {
+        root = value;
         return true;
     }
 
-    bool HandleSimpleType(PyObject* value) {
+    RAPIDJSON_FORCEINLINE bool HandleObject(const HandlerContext& current, PyObject* value) {
+        PyObject* key = PyUnicode_FromStringAndSize(current.key, current.keyLength);
+        if (key == NULL) {
+            Py_DECREF(value);
+            return false;
+        }
+
+        int rc = PyDict_SetItem(current.object, key, value);
+        Py_DECREF(key);
+        Py_DECREF(value);
+
+        return rc != -1;
+    }
+
+    RAPIDJSON_FORCEINLINE bool HandleList(const HandlerContext& current, PyObject* value) {
+        PyList_Append(current.object, value);
+        Py_DECREF(value);
+        return true;
+    }
+
+    RAPIDJSON_FORCEINLINE bool Handle(PyObject* value) {
+        if (root) {
+            const HandlerContext& current = stack.back();
+
+            if (current.isObject)
+                return HandleObject(current, value);
+
+            return HandleList(current, value);
+        }
+        return HandleRoot(value);
+    }
+
+    RAPIDJSON_FORCEINLINE bool HandleSimpleType(PyObject* value) {
         if (!Handle(value)) {
             Py_DECREF(value);
             return false;
@@ -100,7 +110,7 @@ struct PyHandler {
         return true;
     }
 
-    bool Key(const char* str, SizeType length, bool copy) {
+    RAPIDJSON_FORCEINLINE bool Key(const char* str, SizeType length, bool copy) {
         HandlerContext& current = stack.back();
         current.key = str;
         current.keyLength = length;
@@ -108,7 +118,7 @@ struct PyHandler {
         return true;
     }
 
-    bool StartObject() {
+    RAPIDJSON_FORCEINLINE bool StartObject() {
         PyObject* dict = PyDict_New();
         if (dict == NULL) {
             return false;
@@ -128,12 +138,16 @@ struct PyHandler {
         return true;
     }
 
-    bool EndObject(SizeType member_count) {
+    RAPIDJSON_FORCEINLINE bool EndObject(SizeType member_count) {
         if (!objectHook) {
             stack.pop_back();
             return true;
         }
 
+        return EndObjectHook();
+    }
+
+    bool EndObjectHook() {
         PyObject* dict = stack.back().object;
         stack.pop_back();
 
@@ -181,7 +195,7 @@ struct PyHandler {
         return true;
     }
 
-    bool StartArray() {
+    RAPIDJSON_FORCEINLINE bool StartArray() {
         PyObject* list = PyList_New(0);
         if (list == NULL) {
             return false;
@@ -201,7 +215,7 @@ struct PyHandler {
         return true;
     }
 
-    bool EndArray(SizeType elementCount) {
+    RAPIDJSON_FORCEINLINE bool EndArray(SizeType elementCount) {
         stack.pop_back();
         return true;
     }
@@ -260,36 +274,36 @@ struct PyHandler {
         return HandleSimpleType(value);
     }
 
-    bool Null() {
+    RAPIDJSON_FORCEINLINE bool Null() {
         PyObject* value = Py_None;
         Py_INCREF(value);
 
         return HandleSimpleType(value);
     }
 
-    bool Bool(bool b) {
+    RAPIDJSON_FORCEINLINE bool Bool(bool b) {
         PyObject* value = b ? Py_True : Py_False;
         Py_INCREF(value);
 
         return HandleSimpleType(value);
     }
 
-    bool Int(int i) {
+    RAPIDJSON_FORCEINLINE bool Int(int i) {
         PyObject* value = PyLong_FromLong(i);
         return HandleSimpleType(value);
     }
 
-    bool Uint(unsigned i) {
+    RAPIDJSON_FORCEINLINE bool Uint(unsigned i) {
         PyObject* value = PyLong_FromUnsignedLong(i);
         return HandleSimpleType(value);
     }
 
-    bool Int64(int64_t i) {
+    RAPIDJSON_FORCEINLINE bool Int64(int64_t i) {
         PyObject* value = PyLong_FromLongLong(i);
         return HandleSimpleType(value);
     }
 
-    bool Uint64(uint64_t i) {
+    RAPIDJSON_FORCEINLINE bool Uint64(uint64_t i) {
         PyObject* value = PyLong_FromUnsignedLongLong(i);
         return HandleSimpleType(value);
     }
@@ -337,7 +351,7 @@ struct PyHandler {
         return HandleSimpleType(value);
     }
 
-    bool String(const char* str, SizeType length, bool copy) {
+    RAPIDJSON_FORCEINLINE bool String(const char* str, SizeType length, bool copy) {
         PyObject* value = PyUnicode_FromStringAndSize(str, length);
         return HandleSimpleType(value);
     }
@@ -370,6 +384,9 @@ rapidjson_loads(PyObject* self, PyObject* args, PyObject* kwargs)
                                      &useDecimal,
                                      &preciseFloat,
                                      &allowNan))
+    {
+        return NULL;
+    }
 
     if (objectHook && !PyCallable_Check(objectHook)) {
         PyErr_SetString(PyExc_TypeError, "object_hook is not callable");
@@ -437,27 +454,32 @@ rapidjson_loads(PyObject* self, PyObject* args, PyObject* kwargs)
 }
 
 struct WriterContext {
-    const char* key;
+    const char* keyStr;
+    PyObject* keyObj;
     PyObject* object;
     PyObject* decref;
     unsigned level;
     bool isObject;
 
-    WriterContext(const char* k, PyObject* o, bool isO, int l, PyObject* d=NULL)
-    : key(k), object(o), decref(d), level(l), isObject(isO)
+    WriterContext(PyObject* k, PyObject* o, bool isO, int l, PyObject* d=NULL, const char* ks=NULL)
+    : keyStr(ks), keyObj(k), object(o), decref(d), level(l), isObject(isO)
     {}
 };
 
 struct DictItem {
-    char* key_str;
+    const char* keyStr;
+    PyObject* keyObj;
     PyObject* item;
 
-    DictItem(char* k, PyObject* i)
-    : key_str(k), item(i)
+    DictItem(const char* ks, PyObject* k, PyObject* i)
+    : keyStr(ks), keyObj(k), item(i)
     {}
 
     bool operator<(const DictItem& other) const {
-        return strcmp(other.key_str, this->key_str) < 0;
+        return strcmp(
+            other.keyStr ? other.keyStr : PyBytes_AS_STRING(other.keyObj),
+            this->keyStr ? this->keyStr : PyBytes_AS_STRING(this->keyObj)
+            ) < 0;
     }
 };
 
@@ -504,8 +526,13 @@ rapidjson_dumps_internal(
         }
 
         if (object == NULL) {
-            if (current.key != NULL) {
-                writer->Key(current.key);
+            if (current.keyStr != NULL) {
+                writer->Key(current.keyStr);
+            }
+            else if (current.keyObj != NULL) {
+                char* key = PyBytes_AS_STRING(current.keyObj);
+                writer->Key(key);
+                Py_DECREF(current.keyObj);
             }
             else if (current.decref != NULL) {
                 Py_DECREF(current.decref);
@@ -590,8 +617,27 @@ rapidjson_dumps_internal(
             writer->String(s);
         }
         else if (PyUnicode_Check(object)) {
-            char* s = PyUnicode_AsUTF8(object);
-            writer->String(s);
+//            char* s = PyUnicode_AsUTF8(object);
+//            writer->String(s);
+
+//#if (PY_VERSION_HEX >= 0x03030000)
+            if (PyUnicode_IS_COMPACT_ASCII(object)) {
+                char* s = PyUnicode_AsUTF8(object);
+                writer->String(s);
+            }
+            else
+//#endif
+            {
+                PyObject* bytes = PyUnicode_AsUTF8String(object);
+                if (!bytes) {
+                    return NULL;
+                }
+
+                char* s = PyBytes_AS_STRING(bytes);
+                writer->String(s);
+
+                Py_DECREF(bytes);
+            }
         }
         else if (PyList_Check(object)) {
             writer->StartArray();
@@ -626,9 +672,24 @@ rapidjson_dumps_internal(
             if (!sortKeys) {
                 while (PyDict_Next(object, &pos, &key, &item)) {
                     if (PyUnicode_Check(key)) {
-                        char* key_str = PyUnicode_AsUTF8(key);
                         stack.push_back(WriterContext(NULL, item, false, nextLevel));
-                        stack.push_back(WriterContext(key_str, NULL, false, nextLevel));
+
+#if (PY_VERSION_HEX >= 0x03030000)
+                        if (PyUnicode_IS_COMPACT_ASCII(object)) {
+                            char* keyStr = PyUnicode_AsUTF8(object);
+                            stack.push_back(WriterContext(NULL, NULL, false, nextLevel, NULL, keyStr));
+                        }
+                        else
+#endif
+                        {
+                            PyObject* bytes = PyUnicode_AsUTF8String(object);
+                            if (!bytes) {
+                                PyErr_SetString(PyExc_TypeError, "could not decode utf8 from key");
+                                goto error;
+                            }
+
+                            stack.push_back(WriterContext(bytes, NULL, false, nextLevel));
+                        }
                     }
                     else if (!skipKeys) {
                         PyErr_SetString(PyExc_TypeError, "keys must be a string");
@@ -641,8 +702,22 @@ rapidjson_dumps_internal(
 
                 while (PyDict_Next(object, &pos, &key, &item)) {
                     if (PyUnicode_Check(key)) {
-                        char* key_str = PyUnicode_AsUTF8(key);
-                        items.push_back(DictItem(key_str, item));
+#if (PY_VERSION_HEX >= 0x03030000)
+                        if (PyUnicode_IS_COMPACT_ASCII(object)) {
+                            char* keyStr = PyUnicode_AsUTF8(object);
+                            items.push_back(DictItem(keyStr, NULL, item));
+                        }
+                        else
+#endif
+                        {
+                            PyObject* bytes = PyUnicode_AsUTF8String(object);
+                            if (!bytes) {
+                                PyErr_SetString(PyExc_TypeError, "could not decode utf8 from key");
+                                goto error;
+                            }
+
+                            items.push_back(DictItem(NULL, bytes, item));
+                        }
                     }
                     else if (!skipKeys) {
                         PyErr_SetString(PyExc_TypeError, "keys must be a string");
@@ -655,7 +730,7 @@ rapidjson_dumps_internal(
                 std::vector<DictItem>::const_iterator iter = items.begin();
                 for (; iter != items.end(); ++iter) {
                     stack.push_back(WriterContext(NULL, iter->item, false, nextLevel));
-                    stack.push_back(WriterContext(iter->key_str, NULL, false, nextLevel));
+                    stack.push_back(WriterContext(iter->keyObj, NULL, false, nextLevel, NULL, iter->keyStr));
                 }
             }
         }

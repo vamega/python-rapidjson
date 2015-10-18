@@ -1,11 +1,22 @@
 python-rapidjson
 ================
-Python wrapper around RapidJSON. RapidJSON_ is an extremely fast C++ json
-serialization library.
+python-rapidjson is a fast, simple JSON serialization library based on the
+wonderful RapidJSON_ C++ library.  python-rapidjson shares many features with
+the standard library ``json`` module so that you can use it as a drop-in
+replacement.
 
 We do not support legacy python versions, you will need to upgrade to Python 3
 to use this library.
 
+Goal (Why another JSON library?)
+--------------------------------
+python-rapidjson tries to balance performance and compatibility with the
+standard library ``json`` module.  Performance is the main goal, but
+compatibility with the standard library is added where practical and if
+performance is not worsened too much.
+
+python-rapidjson was created because we were not aware of a library that tries
+to balance performance and compatibility.
 
 Getting Started
 ---------------
@@ -15,9 +26,7 @@ First install ``python-rapidjson``:
 
     $ pip install python-rapidjson
 
-
-RapidJSON tries to be as compatible with the standard library ``json`` module so
-it should be a drop in replacement. Basic usage looks like this:
+Basic usage:
 
 .. code-block:: python
 
@@ -31,13 +40,12 @@ it should be a drop in replacement. Basic usage looks like this:
 
 Performance
 -----------
-``python-rapidjson`` tries to be as performant as possible while staying
-compatible with the ``json`` module.  Here are our current benchmarks:
+python-rapidjson is fast because RapidJSON_ is fast.  Here are our current benchmarks:
 
 +-----------------------------------------+--------+------------+------------+-----------+
 |                                         | ujson  | simplejson | rapidjson  | yajl      |
 +=========================================+========+============+============+===========+
-|Array with 256 doubles                   |        |            |            |           |
+| Array with 256 doubles                  |        |            |            |           |
 +-----------------------------------------+--------+------------+------------+-----------+
 | Encode                                  | 13.81s | 12.58s     | 1.82s      | 8.36s     |
 +-----------------------------------------+--------+------------+------------+-----------+
@@ -53,7 +61,7 @@ compatible with the ``json`` module.  Here are our current benchmarks:
 +-----------------------------------------+--------+------------+------------+-----------+
 |                                         |        |            |            |           |
 +-----------------------------------------+--------+------------+------------+-----------+
-|100 dictionaries of 100 arrays           |        |            |            |           |
+| 100 dictionaries of 100 arrays          |        |            |            |           |
 +-----------------------------------------+--------+------------+------------+-----------+
 | Encode                                  | 1.65s  | 5.20s      | 0.77s      | 2.09s     |
 +-----------------------------------------+--------+------------+------------+-----------+
@@ -64,23 +72,36 @@ compatible with the ``json`` module.  Here are our current benchmarks:
 
 To run these tests yourself, clone the repo and run:
 
-.. code-block::
+.. code-block:: bash
 
    $ tox -e py34 -m benchmark
 
+As with any benchmarks, the only useful benchmarks are the ones you gather for
+your specific use case.
 
-Incompatibility
----------------
-Here are things in the standard ``json`` library supports that we have decided
+
+Incompatibility with ``json``
+-----------------------------
+Here are things the standard library ``json`` module supports that we have decided
 not to support:
 
 * ``separators`` argument. This is mostly used for pretty printing and not
-  supported by ``RapidJSON`` so it isn't a high priority. We do support
+  supported by RapidJSON, so it isn't a high priority. We do support the
   ``indent`` kwarg that would get you nice looking JSON anyways.
 
 * Coercing keys when dumping. ``json`` will turn ``True`` into ``'True'`` if you
   dump it out but when you load it back in it'll still be a string. We want the
   dump and load to return the exact same objects so we have decided not to do
   this coercing.
+
+
+Why RapidJSON?
+--------------
+
+changes to rapidjson
+--------------------
+
+design decisions
+----------------
 
 .. _RapidJSON: https://github.com/miloyip/rapidjson
