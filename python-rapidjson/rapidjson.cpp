@@ -21,6 +21,7 @@ using namespace rapidjson;
 static PyObject* rapidjson_decimal_type = NULL;
 static PyObject* rapidjson_timezone_type = NULL;
 static PyObject* rapidjson_timezone_utc = NULL;
+static PyObject* rapidjson_uuid_type = NULL;
 
 struct HandlerContext {
     PyObject* object;
@@ -36,16 +37,24 @@ enum DatetimeMode {
     DATETIME_MODE_ISO8601_UTC = 3
 };
 
+enum UuidMode {
+    UUID_MODE_NONE = 0,
+    UUID_MODE_CANONICAL = 1, // only 4-dashed 32 hex chars: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+    UUID_MODE_HEX = 2        // canonical OR 32 hex chars
+};
+
 struct PyHandler {
     int useDecimal;
     int allowNan;
     PyObject* root;
     PyObject* objectHook;
     DatetimeMode datetimeMode;
+    UuidMode uuidMode;
     std::vector<HandlerContext> stack;
 
-    PyHandler(int ud, PyObject* hook, int an, DatetimeMode dm)
-    : useDecimal(ud), allowNan(an), root(NULL), objectHook(hook), datetimeMode(dm)
+    PyHandler(int ud, PyObject* hook, int an, DatetimeMode dm, UuidMode um)
+    : useDecimal(ud), allowNan(an), root(NULL), objectHook(hook), datetimeMode(dm),
+      uuidMode(um)
     {
         stack.reserve(128);
     }
@@ -605,13 +614,48 @@ struct PyHandler {
         #undef digit
     }
 
+    bool IsUuid(const char* str, SizeType length) {
+        if (uuidMode == UUID_MODE_HEX && length == 32) {
+            for (int i = length - 1; i >= 0; --i)
+                if (!isxdigit(str[i]))
+                    return false;
+            return true;
+        } else if (length == 36
+                   && str[8] == '-' && str[13] == '-'
+                   && str[18] == '-' && str[23] == '-') {
+            for (int i = length - 1; i >= 0; --i)
+                if (i != 8 && i != 13 && i != 18 && i != 23 && !isxdigit(str[i]))
+                    return false;
+            return true;
+        }
+        return false;
+    }
+
+    bool HandleUuid(const char* str, SizeType length) {
+        PyObject* pystr = PyUnicode_FromStringAndSize(str, length);
+        if (pystr == NULL)
+            return false;
+
+        PyObject* value = PyObject_CallFunctionObjArgs(rapidjson_uuid_type, pystr, NULL);
+        Py_DECREF(pystr);
+
+        if (value == NULL)
+            return false;
+        else
+            return HandleSimpleType(value);
+    }
+
     bool String(const char* str, SizeType length, bool copy) {
+        PyObject* value;
+
         if (datetimeMode != DATETIME_MODE_NONE && IsIso8601(str, length))
             return HandleIso8601(str, length);
-        else {
-            PyObject* value = PyUnicode_FromStringAndSize(str, length);
-            return HandleSimpleType(value);
-        }
+
+        if (uuidMode != UUID_MODE_NONE && IsUuid(str, length))
+            return HandleUuid(str, length);
+
+        value = PyUnicode_FromStringAndSize(str, length);
+        return HandleSimpleType(value);
     }
 };
 
@@ -627,6 +671,8 @@ rapidjson_loads(PyObject* self, PyObject* args, PyObject* kwargs)
     int allowNan = 1;
     PyObject* datetimeModeObj = NULL;
     DatetimeMode datetimeMode = DATETIME_MODE_NONE;
+    PyObject* uuidModeObj = NULL;
+    UuidMode uuidMode = UUID_MODE_NONE;
 
     static char* kwlist[] = {
         "s",
@@ -635,17 +681,19 @@ rapidjson_loads(PyObject* self, PyObject* args, PyObject* kwargs)
         "precise_float",
         "allow_nan",
         "datetime_mode",
+        "uuid_mode",
         NULL
     };
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|OpppO:rapidjson.loads",
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|OpppOO:rapidjson.loads",
                                      kwlist,
                                      &jsonObject,
                                      &objectHook,
                                      &useDecimal,
                                      &preciseFloat,
                                      &allowNan,
-                                     &datetimeModeObj))
+                                     &datetimeModeObj,
+                                     &uuidModeObj))
 
     if (objectHook && !PyCallable_Check(objectHook)) {
         PyErr_SetString(PyExc_TypeError, "object_hook is not callable");
@@ -678,10 +726,18 @@ rapidjson_loads(PyObject* self, PyObject* args, PyObject* kwargs)
         }
     }
 
+    if (uuidModeObj && PyLong_Check(uuidModeObj)) {
+        uuidMode = (UuidMode) PyLong_AsLong(uuidModeObj);
+        if (uuidMode < UUID_MODE_NONE || uuidMode > UUID_MODE_HEX) {
+            PyErr_SetString(PyExc_ValueError, "Invalid uuid_time");
+            return NULL;
+        }
+    }
+
     char* jsonStrCopy = (char*) malloc(sizeof(char) * (jsonStrLen+1));
     memcpy(jsonStrCopy, jsonStr, jsonStrLen+1);
 
-    PyHandler handler(useDecimal, objectHook, allowNan, datetimeMode);
+    PyHandler handler(useDecimal, objectHook, allowNan, datetimeMode, uuidMode);
     Reader reader;
     InsituStringStream ss(jsonStrCopy);
 
@@ -760,7 +816,8 @@ rapidjson_dumps_internal(
     int sortKeys,
     int useDecimal,
     unsigned maxRecursionDepth,
-    DatetimeMode datetimeMode)
+    DatetimeMode datetimeMode,
+    UuidMode uuidMode)
 {
     int isDec;
     std::vector<WriterContext> stack;
@@ -1055,6 +1112,20 @@ rapidjson_dumps_internal(
             snprintf(isoformat, ISOFORMAT_LEN-1, "%04d-%02d-%02d", year, month, day);
             writer->String(isoformat);
         }
+        else if (uuidMode != UUID_MODE_NONE
+                 && PyObject_TypeCheck(object, (PyTypeObject *) rapidjson_uuid_type)) {
+            PyObject* retval;
+            if (uuidMode == UUID_MODE_CANONICAL)
+                retval = PyObject_Str(object);
+            else
+                retval = PyObject_GetAttrString(object, "hex");
+            if (retval == NULL)
+                goto error;
+
+            // Decref the return value once it's done being dumped to a string.
+            stack.push_back(WriterContext(NULL, NULL, false, currentLevel, retval));
+            stack.push_back(WriterContext(NULL, retval, false, currentLevel));
+        }
         else if (defaultFn) {
             PyObject* retval = PyObject_CallFunctionObjArgs(defaultFn, object, NULL);
             if (retval == NULL)
@@ -1090,7 +1161,8 @@ error:
         sortKeys, \
         useDecimal, \
         maxRecursionDepth, \
-        datetimeMode)
+        datetimeMode, \
+        uuidMode)
 
 
 static PyObject*
@@ -1109,10 +1181,12 @@ rapidjson_dumps(PyObject* self, PyObject* args, PyObject* kwargs)
     unsigned maxRecursionDepth = MAX_RECURSION_DEPTH;
     PyObject* datetimeModeObj = NULL;
     DatetimeMode datetimeMode = DATETIME_MODE_NONE;
+    PyObject* uuidModeObj = NULL;
+    UuidMode uuidMode = UUID_MODE_NONE;
 
     bool prettyPrint = false;
     const char indentChar = ' ';
-    unsigned char indentCharCount = 4;
+    unsigned indentCharCount = 4;
 
     static char* kwlist[] = {
         "obj",
@@ -1125,9 +1199,10 @@ rapidjson_dumps(PyObject* self, PyObject* args, PyObject* kwargs)
         "use_decimal",
         "max_recursion_depth",
         "datetime_mode",
+        "uuid_mode",
         NULL
     };
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|pppOOppIO:rapidjson.dumps",
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|pppOOppIOO:rapidjson.dumps",
                                      kwlist,
                                      &value,
                                      &skipKeys,
@@ -1138,7 +1213,8 @@ rapidjson_dumps(PyObject* self, PyObject* args, PyObject* kwargs)
                                      &sortKeys,
                                      &useDecimal,
                                      &maxRecursionDepth,
-                                     &datetimeModeObj))
+                                     &datetimeModeObj,
+                                     &uuidModeObj))
         return NULL;
 
     if (defaultFn && !PyCallable_Check(defaultFn)) {
@@ -1160,6 +1236,18 @@ rapidjson_dumps(PyObject* self, PyObject* args, PyObject* kwargs)
 
     if (datetimeModeObj && PyLong_Check(datetimeModeObj)) {
         datetimeMode = (DatetimeMode) PyLong_AsLong(datetimeModeObj);
+        if (datetimeMode < DATETIME_MODE_NONE || datetimeMode > DATETIME_MODE_ISO8601_UTC) {
+            PyErr_SetString(PyExc_ValueError, "Invalid date_time");
+            return NULL;
+        }
+    }
+
+    if (uuidModeObj && PyLong_Check(uuidModeObj)) {
+        uuidMode = (UuidMode) PyLong_AsLong(uuidModeObj);
+        if (uuidMode < UUID_MODE_NONE || uuidMode > UUID_MODE_HEX) {
+            PyErr_SetString(PyExc_ValueError, "Invalid uuid_time");
+            return NULL;
+        }
     }
 
     if (!prettyPrint) {
@@ -1226,23 +1314,59 @@ PyInit_rapidjson()
         return NULL;
     }
 
-    PyObject* decimalModule = PyImport_ImportModule("decimal");
-    if (decimalModule == NULL)
+    PyObject* uuidModule = PyImport_ImportModule("uuid");
+    if (uuidModule == NULL) {
+        Py_DECREF(rapidjson_timezone_type);
+        Py_DECREF(rapidjson_timezone_utc);
         return NULL;
+    }
+
+    rapidjson_uuid_type = PyObject_GetAttrString(uuidModule, "UUID");
+    Py_DECREF(uuidModule);
+
+    if (rapidjson_uuid_type == NULL) {
+        Py_DECREF(rapidjson_timezone_type);
+        Py_DECREF(rapidjson_timezone_utc);
+        return NULL;
+    }
+
+    PyObject* decimalModule = PyImport_ImportModule("decimal");
+    if (decimalModule == NULL) {
+        Py_DECREF(rapidjson_timezone_type);
+        Py_DECREF(rapidjson_timezone_utc);
+        Py_DECREF(rapidjson_uuid_type);
+        return NULL;
+    }
 
     rapidjson_decimal_type = PyObject_GetAttrString(decimalModule, "Decimal");
     Py_DECREF(decimalModule);
 
+    if (rapidjson_decimal_type == NULL) {
+        Py_DECREF(rapidjson_timezone_type);
+        Py_DECREF(rapidjson_timezone_utc);
+        Py_DECREF(rapidjson_uuid_type);
+        return NULL;
+    }
+
     PyObject* module;
 
     module = PyModule_Create(&rapidjson_module);
-    if (module == NULL)
+    if (module == NULL) {
+        Py_DECREF(rapidjson_timezone_type);
+        Py_DECREF(rapidjson_timezone_utc);
+        Py_DECREF(rapidjson_decimal_type);
+        Py_DECREF(rapidjson_uuid_type);
         return NULL;
+    }
 
     PyModule_AddIntConstant(module, "DATETIME_MODE_NONE", DATETIME_MODE_NONE);
     PyModule_AddIntConstant(module, "DATETIME_MODE_ISO8601", DATETIME_MODE_ISO8601);
     PyModule_AddIntConstant(module, "DATETIME_MODE_ISO8601_IGNORE_TZ", DATETIME_MODE_ISO8601_IGNORE_TZ);
     PyModule_AddIntConstant(module, "DATETIME_MODE_ISO8601_UTC", DATETIME_MODE_ISO8601_UTC);
+
+    PyModule_AddIntConstant(module, "UUID_MODE_NONE", UUID_MODE_NONE);
+    PyModule_AddIntConstant(module, "UUID_MODE_HEX", UUID_MODE_HEX);
+    PyModule_AddIntConstant(module, "UUID_MODE_CANONICAL", UUID_MODE_CANONICAL);
 
     PyModule_AddStringConstant(module, "__version__", PYTHON_RAPIDJSON_VERSION);
     PyModule_AddStringConstant(
