@@ -1,5 +1,5 @@
 import pytest
-import rapidjson
+from madiath import rapidjson
 
 # from http://json.org/JSON_checker/test/pass2.json
 JSON = r'''

@@ -8,12 +8,14 @@ except ImportError:
 
 ROOT_PATH = os.path.abspath(os.path.dirname(__file__))
 
+
 def find_version():
     with open(os.path.join(ROOT_PATH, 'python-rapidjson/version.h')) as f:
         data = f.read()
 
     v = re.search(r'PYTHON_RAPIDJSON_VERSION\s+(\S+)', data).group(1)
     return v.replace('"', '')
+
 
 def find_author():
     with open(os.path.join(ROOT_PATH, 'python-rapidjson/version.h')) as f:
@@ -23,17 +25,18 @@ def find_author():
     email = re.search(r'PYTHON_RAPIDJSON_AUTHOR_EMAIL\s+(\S+)', data).group(1)
     return (author.replace('"', ''), email.replace('"', ''))
 
+
 with open('README.rst') as f:
     long_description = f.read()
 
 rapidjson = Extension(
-    'rapidjson',
+    'madiath.rapidjson',
     sources=['./python-rapidjson/rapidjson.cpp'],
-    include_dirs=['./thirdparty/rapidjson/include'],
-)
+    include_dirs=['./thirdparty/rapidjson/include'], )
 
 setup(
-    name='python-rapidjson',
+    name='madiath.rapidjson',
+    # packages=['madiath'],
     version=find_version(),
     description='Python wrapper around rapidjson',
     long_description=long_description,
@@ -51,5 +54,4 @@ setup(
         'Programming Language :: Python :: 3',
         'Programming Language :: Python',
     ],
-    ext_modules=[rapidjson],
-)
+    ext_modules=[rapidjson], )

@@ -1,6 +1,6 @@
 import math
 import pytest
-import rapidjson
+from madiath import rapidjson
 from decimal import Decimal
 
 

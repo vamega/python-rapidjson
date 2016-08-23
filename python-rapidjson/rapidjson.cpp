@@ -1334,7 +1334,7 @@ rapidjson_functions[] = {
 
 static PyModuleDef rapidjson_module = {
     PyModuleDef_HEAD_INIT,
-    "rapidjson",
+    "madiath.rapidjson",
     rapidjson_module_docstring,
     -1,
     rapidjson_functions

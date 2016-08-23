@@ -1,6 +1,6 @@
 import pytest
 import sys
-import rapidjson
+from madiath import rapidjson
 import random
 
 

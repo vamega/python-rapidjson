@@ -21,7 +21,7 @@ except ImportError:
     json = None
 
 try:
-    import rapidjson
+    from madiath import rapidjson
 except ImportError:
     rapidjson = None
 

@@ -1,6 +1,6 @@
 import json
 import pytest
-import rapidjson
+from madiath import rapidjson
 
 
 @pytest.mark.unit

@@ -3,7 +3,7 @@ import math
 import uuid
 
 import pytest
-import rapidjson
+from madiath import rapidjson
 
 
 @pytest.mark.unit
